@@ -354,7 +354,7 @@ class TrayApp:
         if self.is_locked:
             return
         L.info("达到空闲阈值，触发自动上锁 | idle=%.1fs | 阈值=%ss", idle_seconds, self.config.get("auto_lock_idle_seconds", 300))
-        self.start_lock(reason="auto_idle")
+        self._start_lock_internal(reason="auto_idle")
 
     def _do_lock(self, lock_reason="manual"):
         """在独立线程里执行锁定（钩子必须在有消息循环的线程里）"""
@@ -506,7 +506,11 @@ class TrayApp:
         dlg.bind("<Return>", _on_ok)
         dlg.bind("<Escape>", _on_cancel)
 
-    def start_lock(self, icon=None, item=None, reason="manual"):
+    def start_lock(self, icon=None, item=None):
+        """托盘菜单回调入口（pystray 要求签名为 (icon, item)）。手动触发。"""
+        self._start_lock_internal(reason="manual")
+
+    def _start_lock_internal(self, reason="manual"):
         if self.is_locked:
             return
         self.lock_thread = threading.Thread(target=self._do_lock, args=(reason,), daemon=True)
