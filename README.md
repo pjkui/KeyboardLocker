@@ -27,10 +27,11 @@ run_tray_as_admin.bat
 - `KeyboardLocker.exe` — 托盘版（自带 UAC 管理员请求，双击即可）
 - `keyboard_lock.exe` — 命令行版
 
-> 发布新版本：打一个 `v1.2.3` 格式的 tag 即可自动触发构建并创建 Release。
+> 发布新版本：先在 `version.py` 中修改 `__version__`，再打对应 tag 即可触发构建并自动创建 Release（CI 会校验两者一致）。
 >
 > ```bash
-> git tag v1.0.0 && git push origin v1.0.0
+> # 例如发布 1.1.0
+> git tag v1.1.0 -m "Release v1.1.0" && git push origin v1.1.0
 > ```
 
 ## 功能
