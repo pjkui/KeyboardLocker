@@ -34,6 +34,20 @@ jobs:
       - name: Generate app icon
         run: python build_icon.py
 
+      - name: Verify version.py matches tag (only for tag builds)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}" -replace '^v',''
+          $code = python -c "from version import __version__; print(__version__)"
+          $code = $code.Trim()
+          Write-Host "tag version  = $tag"
+          Write-Host "code version = $code"
+          if ($tag -ne $code) {
+            Write-Error "version.py (__version__=$code) does not match git tag (v$tag). Please bump version.py and re-tag."
+            exit 1
+          }
+
       - name: Build KeyboardLocker.exe (tray, UAC admin)
         run: >
           pyinstaller

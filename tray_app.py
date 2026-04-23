@@ -40,11 +40,16 @@ import autostart
 import strict_mode
 import app_logger as L
 import activity_monitor as am
+import updater
+from version import __version__
 
 
 APP_NAME = "KeyboardLocker"
 SINGLE_INSTANCE_MUTEX = "Global\\KeyboardLocker_Tray_Singleton"
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+
+# 后台静默检查更新的最小间隔（秒），防止频繁请求 GitHub API
+UPDATE_CHECK_INTERVAL_SEC = 24 * 3600
 
 
 DEFAULT_CONFIG = {
@@ -76,6 +81,11 @@ DEFAULT_CONFIG = {
         "firefox.exe",
     ],
     "bluetooth_auto_lock_enabled": False,  # 预留：蓝牙离开范围自动上锁（暂未接入）
+
+    # ---------------- 更新检查 ----------------
+    "auto_check_update": True,        # 启动时静默检查 GitHub 最新 Release
+    "last_update_check_ts": 0,         # 上次检查时间戳（秒），用于节流
+    "skip_update_version": "",         # 用户选择"忽略此版本"，不再提醒
 }
 
 
@@ -204,6 +214,128 @@ class TrayApp:
             poll_interval=1.0,
         )
         self.auto_lock_monitor.start()
+
+        # 启动时静默检查更新（节流 + 配置开关 + 后台线程）
+        self._maybe_start_silent_update_check()
+
+
+    # ---- 更新检查 ----
+    def _maybe_start_silent_update_check(self):
+        if not bool(self.config.get("auto_check_update", True)):
+            return
+        last = float(self.config.get("last_update_check_ts", 0) or 0)
+        if (time.time() - last) < UPDATE_CHECK_INTERVAL_SEC:
+            L.info("距离上次检查更新不足 %ds，跳过", UPDATE_CHECK_INTERVAL_SEC)
+            return
+        threading.Thread(target=self._silent_check_update, daemon=True).start()
+
+    def _silent_check_update(self):
+        """后台静默检查；有新版本才弹气球提示。"""
+        try:
+            L.info("开始静默检查更新（当前版本 %s）", __version__)
+            result = updater.check_update(__version__)
+            self.config["last_update_check_ts"] = int(time.time())
+            save_config(self.config)
+            if result.get("error"):
+                L.warning("检查更新失败: %s", result["error"])
+                return
+            if not result["has_update"]:
+                L.info("已是最新版本（latest=%s）", result["latest_tag"])
+                return
+            latest_tag = result["latest_tag"]
+            if latest_tag and latest_tag == self.config.get("skip_update_version"):
+                L.info("用户已忽略此版本: %s", latest_tag)
+                return
+            L.info("发现新版本: %s → %s", __version__, latest_tag)
+            # 在 Tk 主线程弹更新对话框
+            self.tk_root.after(0, lambda: self._show_update_dialog(result, silent_mode=True))
+        except Exception:
+            L.exception("静默检查更新异常")
+
+    def manual_check_update(self, icon=None, item=None):
+        """菜单 → 立即检查更新（无论结果都给反馈）。"""
+        def _do():
+            L.info("手动检查更新（当前版本 %s）", __version__)
+            result = updater.check_update(__version__)
+            self.config["last_update_check_ts"] = int(time.time())
+            save_config(self.config)
+            if result.get("error"):
+                self.tk_root.after(0, lambda: messagebox.showwarning(
+                    "检查更新", f"检查更新失败：\n{result['error']}\n\n请稍后重试，或访问：\n{updater.RELEASES_URL}"
+                ))
+                return
+            if result["has_update"]:
+                self.tk_root.after(0, lambda: self._show_update_dialog(result, silent_mode=False))
+            else:
+                self.tk_root.after(0, lambda: messagebox.showinfo(
+                    "检查更新",
+                    f"当前已是最新版本。\n\n本地版本: {__version__}\n最新版本: {result['latest_tag']}",
+                ))
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _show_update_dialog(self, result, silent_mode):
+        """显示新版本提醒对话框。silent_mode=True 时多提供"忽略此版本"按钮。"""
+        rel = result.get("release") or {}
+        latest_tag = result["latest_tag"]
+        url = rel.get("url") or updater.RELEASES_URL
+        body = rel.get("body") or "（无更新说明）"
+
+        dlg = tk.Toplevel(self.tk_root)
+        dlg.title(f"发现新版本 {latest_tag}")
+        dlg.geometry("520x420")
+        dlg.attributes("-topmost", True)
+
+        tk.Label(
+            dlg,
+            text=f"发现新版本：{latest_tag}\n当前版本：{__version__}",
+            font=("Microsoft YaHei", 11, "bold"),
+            justify="left",
+        ).pack(anchor="w", padx=16, pady=(14, 6))
+
+        tk.Label(dlg, text="更新说明：", font=("Microsoft YaHei", 10)).pack(anchor="w", padx=16)
+
+        text_frame = tk.Frame(dlg)
+        text_frame.pack(fill="both", expand=True, padx=16, pady=(4, 10))
+        text = tk.Text(text_frame, wrap="word", font=("Microsoft YaHei", 9), height=12)
+        scroll = tk.Scrollbar(text_frame, command=text.yview)
+        text.configure(yscrollcommand=scroll.set)
+        text.insert("1.0", body)
+        text.configure(state="disabled")
+        text.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+
+        def open_release():
+            try:
+                import webbrowser
+                webbrowser.open(url, new=2)
+            except Exception as e:
+                L.warning("打开浏览器失败: %s", e)
+
+        def skip_this_version():
+            self.config["skip_update_version"] = latest_tag
+            save_config(self.config)
+            L.info("用户选择忽略版本 %s", latest_tag)
+            dlg.destroy()
+
+        btns = tk.Frame(dlg)
+        btns.pack(pady=10)
+        tk.Button(btns, text="前往下载", width=12, command=open_release).pack(side=tk.LEFT, padx=6)
+        tk.Button(btns, text="稍后提醒", width=12, command=dlg.destroy).pack(side=tk.LEFT, padx=6)
+        if silent_mode:
+            tk.Button(btns, text="忽略此版本", width=12, command=skip_this_version).pack(side=tk.LEFT, padx=6)
+
+    def toggle_auto_check_update(self, icon=None, item=None):
+        cur = bool(self.config.get("auto_check_update", True))
+        self.config["auto_check_update"] = not cur
+        # 切到开启时清掉 skip_version 与 节流，让用户能看到结果
+        if not cur:
+            self.config["skip_update_version"] = ""
+            self.config["last_update_check_ts"] = 0
+        save_config(self.config)
+        L.info("自动检查更新: %s", not cur)
+        if self.icon:
+            self.icon.menu = self._build_menu()
+            self.icon.update_menu()
 
 
     # ---- 锁定 ----
@@ -833,6 +965,12 @@ class TrayApp:
             ),
             Menu.SEPARATOR,
             Item("查看日志", self.open_log_file),
+            Item("检查更新...", self.manual_check_update),
+            Item(
+                "自动检查更新",
+                self.toggle_auto_check_update,
+                checked=lambda item: bool(self.config.get("auto_check_update", True)),
+            ),
             Item("关于", self.show_about),
             Item("退出", self.quit_app),
         )
@@ -841,7 +979,7 @@ class TrayApp:
         if self.icon:
             try:
                 self.icon.icon = make_icon_image(locked=self.is_locked)
-                self.icon.title = f"{APP_NAME} - {'已锁定' if self.is_locked else '就绪'}"
+                self.icon.title = f"{APP_NAME} v{__version__} - {'已锁定' if self.is_locked else '就绪'}"
             except Exception:
                 pass
 
@@ -850,7 +988,7 @@ class TrayApp:
         self.icon = pystray.Icon(
             APP_NAME,
             icon=make_icon_image(locked=False),
-            title=f"{APP_NAME} - 就绪",
+            title=f"{APP_NAME} v{__version__} - 就绪",
             menu=self._build_menu(),
         )
 
@@ -902,7 +1040,7 @@ def main():
 
     admin = _is_admin()
     L.info("=" * 50)
-    L.info("托盘程序启动 | PID=%d | 管理员=%s | 日志=%s", os.getpid(), admin, L.get_log_path())
+    L.info("托盘程序启动 | 版本=%s | PID=%d | 管理员=%s | 日志=%s", __version__, os.getpid(), admin, L.get_log_path())
     if not admin:
         L.warning("当前不是管理员权限，部分高权限窗口的输入可能无法拦截")
     # 如果上次异常退出，可能留下未恢复的"严格模式"注册表状态 → 启动时清理
