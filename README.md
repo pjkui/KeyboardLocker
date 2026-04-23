@@ -19,6 +19,20 @@ install_deps.bat
 run_tray_as_admin.bat
 ```
 
+## 下载预编译 EXE
+
+每次推送到 `main` 分支，GitHub Actions 都会自动打包一份 Windows x64 exe，可在仓库的 [Actions](https://github.com/pjkui/KeyboardLocker/actions) 页面下载 artifact（7 天保留）。
+
+正式版本请在 [Releases](https://github.com/pjkui/KeyboardLocker/releases) 页面下载：
+- `KeyboardLocker.exe` — 托盘版（自带 UAC 管理员请求，双击即可）
+- `keyboard_lock.exe` — 命令行版
+
+> 发布新版本：打一个 `v1.2.3` 格式的 tag 即可自动触发构建并创建 Release。
+>
+> ```bash
+> git tag v1.0.0 && git push origin v1.0.0
+> ```
+
 ## 功能
 
 - 拦截所有键盘/鼠标输入，屏幕/视频照常刷新

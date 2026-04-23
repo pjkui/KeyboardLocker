@@ -30,6 +30,11 @@ def _is_admin():
         return False
 
 
+def _is_frozen():
+    """是否运行在 PyInstaller 打包产物里。"""
+    return getattr(sys, "frozen", False)
+
+
 def _get_pythonw_exe():
     """返回 pythonw.exe 的绝对路径，找不到就用 python.exe"""
     exe_dir = os.path.dirname(sys.executable)
@@ -43,7 +48,12 @@ def _get_target_script():
 
 
 def _build_command():
-    """返回 (exe, arg) 两部分，用于任务计划/注册表"""
+    """返回 (exe, arg) 两部分，用于任务计划/注册表。
+    - 打包成 exe 后：直接启动自身（sys.executable），无需参数
+    - 源码运行：pythonw + tray_app.py
+    """
+    if _is_frozen():
+        return sys.executable, ""
     exe = _get_pythonw_exe()
     script = _get_target_script()
     return exe, f'"{script}"'
@@ -52,7 +62,7 @@ def _build_command():
 # ---------------- 注册表方式 ----------------
 def _reg_enable():
     exe, arg = _build_command()
-    cmd = f'"{exe}" {arg}'
+    cmd = f'"{exe}" {arg}'.rstrip()
     try:
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_RUN_PATH, 0, winreg.KEY_SET_VALUE)
         winreg.SetValueEx(key, REG_APP_NAME, 0, winreg.REG_SZ, cmd)
@@ -123,7 +133,7 @@ def _task_enable():
     #   /RL HIGHEST : 以最高权限运行
     #   /F          : 覆盖已有同名任务
     #   /TR         : 要执行的命令
-    tr = f'"{exe}" {arg}'
+    tr = f'"{exe}" {arg}'.rstrip()
     rc, out, err = _run_schtasks([
         "/Create", "/TN", TASK_NAME,
         "/TR", tr,

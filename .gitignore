@@ -26,3 +26,10 @@ Thumbs.db
 config.json
 logs/
 _strict_backup.json
+
+# PyInstaller 打包产物
+build/
+dist/
+release/
+*.spec
+app.ico
