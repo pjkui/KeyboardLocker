@@ -6,4 +6,4 @@
   2) git tag v<version> && git push origin v<version>
 """
 
-__version__ = "1.1.1"
+__version__ = "1.1.2"
